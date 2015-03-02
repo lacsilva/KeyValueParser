@@ -41,7 +41,7 @@ module parser
    implicit none
    private
    !> A description of the keys we will find and their properties.
-   type parser_vars
+   type parser_var
       character(len=60):: varName='' !< The key name
       character(len=60):: section='' !< The section the key belongs to
       logical:: isSet=.false. !< Did we find and parsed a key with this name already?
@@ -63,47 +63,134 @@ module parser
       module procedure read_val_string
    end interface
 
-   public:: read_val, parse, parser_vars, parser_section
+   public:: read_val, parse, parser_var, parser_section
+   public:: checkEntryValidity, entryIndexForVarName
 
 contains
 
-!> Reads one line from the specified unit and outputs the variable name and possible values as a string.
-!! @par variable is the variable name.
+   !********************************************************************
+   !> Reads one line from the specified unit and outputs the key 
+   !! name and possible values as a string.\n
+   !! @par key is the key name.
    !! @par line is the rhs of the attribution.
    !! @par unit_in is the unit to read from
    !! @par error is an error code.
-subroutine parse(unit_in, variable, line, error)
+   !! \todo parse comments
+   subroutine parse(unit_in, key, line, error)
       implicit none
       integer, intent(in):: unit_in
-   character(len=*), intent(out):: variable
+      character(len=*), intent(out):: key
       character(len=256), intent(out):: line
       integer, intent(out):: error
       character(len=256):: line2
       character:: first
       integer:: eq
-   variable = ""
-      error    = 0
+      key   = ""
+      error = 0
       do
          read(unit_in,'(A)',iostat=error) line
          if (error.ne.0) then
+            if (error == iostat_end) then
+               error = WARN_END_OF_FILE
+            else
+               error = ERR_CONFIG_UNREADABLE
+            endif
             return
          endif
-         line2 = adjustl(line)
+         line2 = trim(adjustl(line))
          first = line2(1:1)
-         if((first=='#').or.(first=='*').or.(first=='')) then
-            cycle
-         elseif(first=='[') then
-            eq = scan(line2,"]")
-         variable = 'SECTION'
-            line = trim(adjustl(line2(1:eq-1)))
-         else
-            eq = scan(line2,"=")
-         variable = trim(adjustl(line2(1:eq-1)))
-            line = adjustl(line2(eq+1:))
+         select case(first)
+            case('#','*','')
+               cycle
+            case('[')
+               eq = scan(line2,"]")
+               key = 'SECTION'
+               line = trim(adjustl(line2(2:eq-1)))
+               exit
+            case default
+               eq = scan(line2,"=")
+               key = trim(adjustl(line2(1:eq-1)))
+               line = adjustl(line2(eq+1:))
+               exit
+         endselect
+      enddo
+   end subroutine parse
+
+   !*********************************************************************
+   !> Checks whether a key is valid according to a
+   !! list of keys and a list of sections provided.\n
+   !! Secion headers are always considered invalid keys.\n
+   !! When a key is valid, the \a isSet attribute is set to .true.
+   subroutine checkEntryValidity(key, line, sections, keys,  currentSection, isValidKey, isValidSection, error)
+      implicit none
+      integer, intent(out):: error
+      logical, intent(out):: isValidKey
+      logical, intent(inout):: isValidSection
+      character(len=*), intent(inout):: currentSection
+      character(len=*), intent(in):: key, line
+      type(parser_var), intent(inout):: keys(:)
+      type(parser_section), intent(in):: sections(:)
+      integer:: i, nSections, nKeys
+      error        = 0
+      isValidKey = .false.
+      nSections    = size(sections)
+      nKeys        = size(keys) 
+
+      ! We have a section header. Get its name and check it is valid.
+      if (trim(key)=='SECTION') then
+         call read_val(line, currentSection)
+         isValidSection=.false.
+         ! Check that the section is known.
+         do i=1, nSections
+            if (trim(currentSection) == trim(sections(i)%sectionName)) then
+                  isValidSection=.true.
+               exit
+            endif
+         enddo
+         if (.not.isValidSection) then
+            Write(*,*) 'Found an unknown section: ', trim(currentSection)
+            error = ERR_INVALID_SECTION
+            return
+         endif
+      else ! We have a key entry. Check that it is valid.
+         entries:do i=1, nKeys
+            if ( trim(keys(i)%varName) == trim(key)) then
+               if ( trim(keys(i)%section) == trim(currentSection)) then
+                  isValidKey  = .true.
+                  keys(i)%isSet = .true.
+                  exit
+               else
+                  Write(*,*) 'Entry ',trim(key), ' filed under the wrong section: ', trim(currentSection)
+                  Write(*,*) 'Entry ',trim(key), ' should have been under: ', trim(keys(i)%section)
+                  error = ERR_WRONG_ENTRY_IN_SECTION
+                  return
+               endif
+            endif
+         enddo entries
+         if (.not.isValidKey) then
+            Write(*,*) 'Found an invalid entry: ', trim(key)
+            error = ERR_INVALID_ENTRY
+            return
+         endif
+      endif
+   end subroutine
+
+   !*************************************************************
+   !> Finds the key entry index from its name in a given list.
+   pure integer function entryIndexForVarName(keyList,key)
+      implicit none
+      character(len=*), intent(in):: key
+      type(parser_var), intent(in):: keyList(:)
+      integer:: i, nKeys
+      nKeys = size(keyList)
+      do i=1, nKeys
+         if (trim(keyList(i)%varName) == trim(key)) then
+            entryIndexForVarName = i
             exit
          endif
       enddo
-   end subroutine parse
+   end function
+
    !***************************************************
    pure subroutine read_val_int(line, value)
       implicit none
