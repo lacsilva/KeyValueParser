@@ -90,7 +90,7 @@ subroutine parse(unit_in, variable, line, error)
          endif
          line2 = adjustl(line)
          first = line2(1:1)
-         if((first=='#').or.(first=='*')) then
+         if((first=='#').or.(first=='*').or.(first=='')) then
             cycle
          elseif(first=='[') then
             eq = scan(line2,"]")
